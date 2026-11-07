@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LLPM 4脚ねじり駆動シミュレーター</title>
+<script src="https://cdn.jsdelivr.net/npm/planck@1.4.3/dist/planck.min.js"></script>
+<style>
+:root{--bg:#f7f6f2;--fg:#222;--mut:#666;--card:#fff;--bd:#d8d6ce;--body:#3b7ddd;--leg:#e08a1e;--acc:#1d6b57;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1a1b1e;--fg:#e8e8e6;--mut:#9a9a96;--card:#25262a;--bd:#3a3b40;--body:#5b9bf0;--leg:#f0a040;--acc:#4cc2a0}}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 "Hiragino Sans","Noto Sans JP",system-ui,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:12px}
+h1{font-size:18px;margin:4px 0}h2{font-size:14px;margin:0 0 6px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:10px;margin-bottom:10px}
+canvas{width:100%;display:block;border-radius:6px}
+#sim{background:var(--bg);border:1px solid var(--bd);aspect-ratio:1000/460}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select{font:inherit;padding:4px 10px;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--fg);cursor:pointer}
+button.p{background:var(--acc);color:#fff;border-color:var(--acc)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px}
+.m{background:var(--bg);border-radius:6px;padding:4px 8px}.m b{display:block;font-size:16px;font-variant-numeric:tabular-nums}.m span{color:var(--mut);font-size:11px}
+.pg{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:4px 16px}
+.pg label{display:grid;grid-template-columns:1fr auto;font-size:12px}.pg input{grid-column:1/3;width:100%}
+.three{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}@media(max-width:800px){.three{grid-template-columns:1fr}}
+.sc{overflow-x:auto}table{border-collapse:collapse;font-size:12px}td,th{border:1px solid var(--bd);padding:3px 8px;text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}
+pre{margin:0;max-height:200px;overflow:auto;font-size:11px;background:var(--bg);padding:6px;border-radius:6px}
+small,.note{color:var(--mut);font-size:12px}
+</style></head><body><main>
+<h1>LLPM 4脚モデル：胴体のねじりで対角ペアを上げ下げ</h1>
+<div class="card">
+<canvas id="sim" width="1000" height="460"></canvas>
+<div class="row" style="margin-top:8px">
+<button class="p" id="run">▶ 開始</button><button id="stepb">コマ送り</button><button id="reset">リセット</button>
+<label>速度 <select id="spd"><option>0.1</option><option>0.25</option><option selected>1</option><option>2</option></select></label>
+</div>
+<small>横から見た図。橙＝対角ペアA（前脚A・後脚A）、青緑＝対角ペアB。脚先は接地中が赤、空中が青。赤い縦線が開始位置です。</small>
+</div>
+<div class="card"><h2>計測</h2><div class="grid" id="met"></div></div>
+<div class="three"><div class="card"><h2>胴体の水平位置 (cm)</h2><canvas id="c1" width="400" height="160"></canvas></div>
+<div class="card"><h2>4本の脚の角度 (°)（橙＝A、青緑＝B）</h2><canvas id="c2" width="400" height="160"></canvas></div>
+<div class="card"><h2>胴体の傾き (°)</h2><canvas id="c3" width="400" height="160"></canvas></div></div>
+<div class="card"><h2>パラメーター（変更すると自動でリセット）</h2><div class="pg" id="pg"></div><div class="row" style="margin-top:6px"><button class="p" id="preset">安定歩行の設定を適用</button><label>時間刻み <select id="sps"><option value="240">1/240 s</option><option value="480">1/480 s</option><option value="960">1/960 s</option></select></label></div><small id="legnfo"></small></div>
+<div class="card"><h2>検証実験（10周期をバックグラウンドで計算）</h2>
+<div class="row"><select id="exp"></select><button class="p" id="runexp">実行</button></div>
+<div id="res" class="sc" style="margin-top:8px"></div></div>
+<div class="card note"><h2>モデルと限界</h2>
+・横から見た2次元モデル（Box2D系の planck.js）。左右の脚は同じ位置に重なり、胴体の左右の傾き（ロール）と横方向の安定は扱いません。<br>
+・ねじりは「股関節の取り付け位置が胴体に対して上下する」入力として扱います。対角ペアA（前脚A・後脚A）は＋、ペアBは位相差ぶんずらした動き。上下量は 左右の脚の間隔÷2 × sin(ねじり角)。上下は角度制御のモーターで、力の上限があり、水平方向は駆動しません。<br>
+・胴体は傾き（ピッチ）も水平位置も自由です。各脚は角度制限付きの受動関節（ストッパーは剛体拘束）で、先端の摩擦だけで地面と作用します。<br>
+・初期値の上限ストッパー角は30°です。80°では体重を受けた脚が開ききり、胴体が潰れて歩行になりません。<br>
+・前後の脚の長さが違うときは、脚の初期角度（長い脚ほど大きく傾ける）を自動で調整して、全部の脚先が地面付近から始まるようにしています。角度制限に収まらない場合は一部の脚先が少し浮き、最初に落ちる動きが入ります。脚（棒）の質量は長さに比例させています。<br>・「安定歩行の設定」は乱数探索で見つけた組み合わせです（胴体の傾き約5°以内、時間刻み1/480〜1/960 sで前進量がほぼ一致）。最大でも約2.7 cm/周期と遅く、この単純化したモデルでの結果です。<br>・全体で約180 g（胴体120 g＋脚4本48 g＋関節部8 g）、胴体23×8 cm、脚10 cm の想定値です。実物の寸法ではありません。</div>
+<script>
+const pl=planck,V=pl.Vec2,TAU=Math.PI/180,G=98;
+const PD=[['mb','胴体質量 (g)',50,400,5,120],['tw','胴体の長さ (cm)',10,40,0.5,23],['tb','胴体の高さ (cm)',3,15,0.5,8],['cx','胴体重心位置x (cm, 前が＋)',-8,8,0.1,0],['ax','前後の脚の位置 (胴体長さ比)',0.1,0.45,0.01,0.3],['L','後脚の長さ (cm)',4,20,0.5,10],['fr','前脚÷後脚の長さ比',0.6,1.6,0.05,1],['mr','脚（棒）の質量 (g/本)',1,50,1,4],['mw','おもりの質量 (g/本)',0,50,1,8],['cs','おもり位置 (0=股関節,1=先端)',0,1,0.05,0.5],['th0','脚の初期角度 (°,先端が後ろ)',0,80,1,20],['sMin','ストッパー下限角 (°)',-30,80,1,20],['sMax','ストッパー上限角 (°)',10,120,1,30],['res','股関節の回転抵抗',0,1,0.02,0],['mu','摩擦係数',0,2,0.05,0.6],['e','反発係数',0,1,0.05,0.1],['wd','左右の脚の間隔 (cm)',2,20,0.5,10],['phi','ねじり角 (°)',1,45,1,20],['T','ねじりの周期 (s)',0.4,4,0.05,1.2],['ph','対角ペアの位相差 (°)',0,360,5,180],['drag','胴体の水平粘性抵抗 (1/s)',0,10,0.5,0]];
+const P={sps:240};PD.forEach(d=>P[d[0]]=d[5]);
+const NAMES=['前脚A','後脚A','前脚B','後脚B'];
+class Sim{
+constructor(p){this.p=p;this.dt=1/(p.sps||240);this.t=0;this.n=0;this.cycles=0;this.xs=[];
+this.hist={t:[],x:[],a:[[],[],[],[]],c:[[],[],[],[]],pt:[]};
+const w=this.w=new pl.World({gravity:V(0,-G),allowSleep:false});
+const hw=p.tw/20,hh=p.tb/20,hyo=0.6*hh,ax=p.ax*p.tw/10,Lh=p.L/10,Lf=Lh*p.fr,Li=[Lf,Lh,Lf,Lh];this.Li=Li;
+const cl=a=>Math.min(Math.max(a,p.sMin),p.sMax)*TAU;const t0=cl(p.th0),Hn=Math.min(Lf,Lh)*Math.cos(t0);
+const thi=Li.map(l=>cl(Math.acos(Math.min(1,Hn/l))/TAU));const H=Math.max(...Li.map((l,i)=>l*Math.cos(thi[i])));
+const hipY=H+0.003,tY=hipY+hyo,cxw=p.cx/10;
+this.hw=hw;this.hh=hh;this.hyo=hyo;
+const gr=this.ground=w.createBody({type:'static',position:V(0,-0.5)});gr.createFixture(pl.Box(1000,0.5),{friction:p.mu,restitution:p.e});
+const tor=this.tor=w.createBody({type:'dynamic',position:V(0,tY)});
+tor.createFixture(pl.Box(hw,hh),{density:0,friction:0,restitution:0,filterGroupIndex:-1});
+tor.setMassData({mass:p.mb,center:V(cxw,0),I:p.mb*(4*hw*hw+4*hh*hh)/12+p.mb*cxw*cxw});
+const lp=Li.map(L=>{const mr=p.mr*L/Lh,mw=p.mw,s=p.cs*L,m=mr+mw,com=(mr*L/2+mw*s)/m,Ih=mr*L*L/3+mw*s*s;return{m,com,Ih,Ic:Ih-m*com*com,L}});this.lp=lp;this.mT=p.mb+lp.reduce((a,q)=>a+q.m+2,0);
+this.legs=[];this.pj=[];this.rj=[];this.xo=[ax,-ax,ax,-ax];this.pair=[0,0,1,1];
+for(let i=0;i<4;i++){
+ const hip=V(this.xo[i],tY-hyo);
+ const hb=w.createBody({type:'dynamic',position:hip});hb.createFixture(pl.Box(0.02,0.02),{density:0,friction:0,filterGroupIndex:-1});hb.setMassData({mass:2,center:V(0,0),I:0.01});
+ const pj=w.createJoint(pl.PrismaticJoint({enableMotor:true,maxMotorForce:6*this.mT*G,motorSpeed:0},tor,hb,hip,V(0,1)));
+ const leg=w.createBody({type:'dynamic',position:hip});
+ leg.createFixture(pl.Box(0.03,lp[i].L/2,V(0,-lp[i].L/2),0),{density:0,friction:p.mu,restitution:p.e,filterGroupIndex:-1});
+ leg.setMassData({mass:lp[i].m,center:V(0,-lp[i].com),I:lp[i].Ih});
+ const rj=w.createJoint(pl.RevoluteJoint({enableLimit:true,lowerAngle:-p.sMax*TAU,upperAngle:-p.sMin*TAU},hb,leg,hip));
+ leg.setTransform(hip,-thi[i]);
+ this.legs.push(leg);this.pj.push(pj);this.rj.push(rj);}
+this.y0=tor.getWorldCenter().y;this.x0=tor.getWorldCenter().x;
+this.th=thi.map(a=>a/TAU);this.con=[false,false,false,false];this.cp=[null,null,null,null];this.tgt=[0,0,0,0];
+}
+step(){const p=this.p,dt=this.dt,tor=this.tor;
+const amp=(p.wd/20)*Math.sin(p.phi*TAU),om=2*Math.PI/p.T;
+for(let i=0;i<4;i++){const ph=this.pair[i]?p.ph*TAU:0;this.tgt[i]=amp*Math.sin(om*this.t+ph);
+ const jt=this.pj[i].getJointTranslation();this.pj[i].setMotorSpeed(Math.max(-5,Math.min(5,40*(this.tgt[i]-jt))));
+ if(p.res>0){const l=this.legs[i];l.applyTorque(-p.res*0.5*this.lp[i].Ih/dt*(l.getAngularVelocity()-this.pj[i].getBodyB().getAngularVelocity()),true)}}
+const v=tor.getLinearVelocity();if(p.drag>0)tor.applyForceToCenter(V(-p.drag*p.mb*v.x,0),true);
+this.w.step(dt,16,8);
+for(let i=0;i<4;i++){this.th[i]=-this.rj[i].getJointAngle()/TAU;let con=false,cp=null;
+ for(let ce=this.legs[i].getContactList();ce;ce=ce.next){const k=ce.contact;if(k.isTouching()&&(k.getFixtureA().getBody()===this.ground||k.getFixtureB().getBody()===this.ground)){con=true;cp=k.getWorldManifold(null).points[0];break}}
+ this.con[i]=con;this.cp[i]=cp}
+const t0=this.t;this.t+=dt;this.n++;
+if(Math.floor(this.t/p.T)>Math.floor(t0/p.T)){this.cycles++;this.xs.push(this.dist)}
+if(this.n%Math.round(1/dt/60)===0){const h=this.hist;h.t.push(this.t);h.x.push(this.dist);h.pt.push(tor.getAngle()/TAU);for(let i=0;i<4;i++){h.a[i].push(this.th[i]);h.c[i].push(this.con[i]?1:0)}
+ if(h.t.length>6000){h.t.splice(0,1000);h.x.splice(0,1000);h.pt.splice(0,1000);for(let i=0;i<4;i++){h.a[i].splice(0,1000);h.c[i].splice(0,1000)}}}}
+get dist(){return(this.tor.getWorldCenter().x-this.x0)*10}
+}
+function trial(p,cycles){const s=new Sim(Object.assign({},p));const n=Math.round(cycles*p.T/s.dt);for(let i=0;i<n;i++)s.step();return s}
+function summ(s){const x=s.xs,n=x.length;return{dist:s.dist,per:n>1?(x[n-1]-x[0])/(n-1):0,pitch:s.tor.getAngle()/TAU}}
+
+const EXP=[
+['摩擦ゼロとの比較',[['現在の設定',{}],['摩擦 0',{mu:0}]]],
+['左右反転（脚とストッパーの向きを逆に）',[['現在の設定',{}],['反転',P=>({sMin:-P.sMax,sMax:-P.sMin,th0:-P.th0})]]],
+['対角ペアの位相差',[0,90,180,270].map(ph=>['位相差 '+ph+'°',{ph}])],
+['ねじり角',[5,10,20,30,40].map(phi=>['ねじり角 '+phi+'°',{phi}])],
+['ねじりの周期',[0.6,0.9,1.2,2,3].map(T=>['周期 '+T+' s',{T}])],
+['胴体の重心位置（前が＋）',[-6,-3,0,3,6].map(cx=>['重心 '+cx+' cm',{cx}])],
+['前脚÷後脚の長さ比',[0.7,0.85,1,1.15,1.3].map(fr=>['比 '+fr,{fr}])],
+['上限ストッパー角',[25,30,40,50,80].map(sMax=>['上限 '+sMax+'°',{sMax}])],
+['時間刻みの収束確認',[120,240,480,960].map(sps=>['1/'+sps+' s',{sps}])]];
+let sim=new Sim(P),running=false,speed=1,acc=0,last=performance.now(),cam=0;
+const $=id=>document.getElementById(id);
+PD.forEach(d=>{const lb=document.createElement('label');lb.innerHTML=`<span>${d[1]}</span><b id="v_${d[0]}">${d[5]}</b><input type="range" min="${d[2]}" max="${d[3]}" step="${d[4]}" value="${d[5]}">`;
+lb.querySelector('input').oninput=ev=>{P[d[0]]=+ev.target.value;$('v_'+d[0]).textContent=ev.target.value;doReset()};$('pg').appendChild(lb)});
+function doReset(){sim=new Sim(P);cam=sim.x0;$('legnfo').textContent=`脚の重心：股関節から 前脚${(sim.lp[0].com/sim.lp[0].L*100).toFixed(0)}%・後脚${(sim.lp[1].com/sim.lp[1].L*100).toFixed(0)}%、前脚${(sim.lp[0].L*10).toFixed(1)} cm・後脚${(sim.lp[1].L*10).toFixed(1)} cm、ねじりによる股関節の上下 ±${(P.wd/2*Math.sin(P.phi*TAU)).toFixed(2)} cm`}
+const PRE={sMin:8,sMax:18,th0:12,cx:-1.6,fr:1.17,phi:11,T:1.78,ph:75,wd:8.3,ax:0.31,mu:0.86,L:6.5,mw:3,cs:0.9};
+$('preset').onclick=()=>{Object.assign(P,PRE,{sps:480});$('sps').value=480;document.querySelectorAll('#pg label').forEach((lb,i)=>{const k=PD[i][0];if(k in PRE){lb.querySelector('input').value=PRE[k];$('v_'+k).textContent=PRE[k]}});doReset()};
+$('sps').onchange=e=>{P.sps=+e.target.value;doReset()};
+doReset();
+$('reset').onclick=doReset;
+$('run').onclick=()=>{running=!running;$('run').textContent=running?'⏸ 一時停止':'▶ 開始'};
+$('stepb').onclick=()=>{running=false;$('run').textContent='▶ 開始';for(let i=0;i<4;i++)sim.step()};
+$('spd').onchange=e=>speed=+e.target.value;
+const MET=[['dist','水平移動距離 (cm)'],['cyc','経過周期数'],['per','1周期あたり (cm)'],['vel','平均速度 (cm/s)'],['pit','胴体の傾き (°)'],['z','胴体の高さ (cm)'],['con','接地（前A 後A 前B 後B）']];
+$('met').innerHTML=MET.map(m=>`<div class="m"><span>${m[1]}</span><b id="m_${m[0]}">-</b></div>`).join('');
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const S=100,CA='#e08a1e',CB='#1aa59a';
+function quad(c,pts,X,Y,fill){c.fillStyle=fill;c.beginPath();pts.forEach((a,i)=>i?c.lineTo(X(a.x),Y(a.y)):c.moveTo(X(a.x),Y(a.y)));c.closePath();c.fill()}
+function draw(){const cv=$('sim'),c=cv.getContext('2d'),W=cv.width,H=cv.height,gy=H*0.82,tor=sim.tor;
+const tc=tor.getWorldCenter();cam+=(tc.x-cam)*0.15;const X=x=>(x-cam)*S+W/2,Y=y=>gy-y*S;
+c.clearRect(0,0,W,H);c.font='11px sans-serif';
+c.strokeStyle=css('--mut');c.fillStyle=css('--mut');c.beginPath();c.moveTo(0,gy);c.lineTo(W,gy);c.stroke();
+const t0=Math.floor((cam-W/2/S)/0.5)*0.5;for(let x=t0;x<cam+W/2/S+0.5;x+=0.5){c.beginPath();c.moveTo(X(x),gy);c.lineTo(X(x),gy+(Math.abs(x%2.5)<1e-6?10:5));c.stroke();if(Math.abs(x%2.5)<1e-6)c.fillText((x*10).toFixed(0)+' cm',X(x)-12,gy+22)}
+c.strokeStyle='#d33';c.beginPath();c.moveTo(X(sim.x0),gy-250);c.lineTo(X(sim.x0),gy);c.stroke();c.fillStyle='#d33';c.fillText('開始位置',X(sim.x0)+3,gy-240);
+quad(c,[[-1,-1],[1,-1],[1,1],[-1,1]].map(a=>tor.getWorldPoint(V(a[0]*sim.hw,a[1]*sim.hh))),X,Y,css('--body'));
+for(const grp of [1,0])for(let i=0;i<4;i++){if(sim.pair[i]!==grp)continue;const l=sim.legs[i],Lw=sim.Li[i];
+ c.globalAlpha=grp?0.75:1;quad(c,[[-.03,0],[.03,0],[.03,-Lw],[-.03,-Lw]].map(a=>l.getWorldPoint(V(a[0],a[1]))),X,Y,grp?CB:CA);c.globalAlpha=1;
+ const tip=l.getWorldPoint(V(0,-Lw));c.fillStyle=sim.con[i]?'#e22':'#25f';c.beginPath();c.arc(X(tip.x),Y(tip.y)-1,4,0,7);c.fill();
+ const h=sim.rj[i].getAnchorA();c.fillStyle='#fff';c.strokeStyle='#000';c.beginPath();c.arc(X(h.x),Y(h.y),3.5,0,7);c.fill();c.stroke()}
+c.strokeStyle='#0a0';c.lineWidth=2;c.beginPath();c.moveTo(X(tc.x)-6,Y(tc.y));c.lineTo(X(tc.x)+6,Y(tc.y));c.moveTo(X(tc.x),Y(tc.y)-6);c.lineTo(X(tc.x),Y(tc.y)+6);c.stroke();c.lineWidth=1;
+const d=sim.dist;c.fillStyle=css('--fg');c.font='13px sans-serif';c.fillText('水平移動 '+d.toFixed(2)+' cm　t = '+sim.t.toFixed(2)+' s',10,18);
+const set=(k,v)=>$('m_'+k).textContent=v;
+set('dist',d.toFixed(2));set('cyc',(sim.t/P.T).toFixed(2));set('per',sim.xs.length>1?((sim.xs[sim.xs.length-1]-sim.xs[0])/(sim.xs.length-1)).toFixed(2):'-');set('vel',sim.t>0?(d/sim.t).toFixed(2):'0');set('pit',(tor.getAngle()/TAU).toFixed(1));set('z',(tc.y*10).toFixed(2));set('con',sim.con.map(x=>x?'●':'○').join(' '));
+const h=sim.hist;chart($('c1'),h.t,[h.x],['#1a7'],null);chart($('c2'),h.t,h.a,[CA,CA,CB,CB],[P.sMin,P.sMax]);chart($('c3'),h.t,[h.pt],['#a3a'],[0])}
+function chart(cv,t,vs,cols,lines){const c=cv.getContext('2d'),W=cv.width,H=cv.height;c.clearRect(0,0,W,H);if(t.length<2)return;
+const te=t[t.length-1],ts=Math.max(0,te-10);let i0=0;while(t[i0]<ts)i0++;let mn=1e9,mx=-1e9;vs.forEach(v=>{for(let i=i0;i<t.length;i++){mn=Math.min(mn,v[i]);mx=Math.max(mx,v[i])}});
+if(lines)lines.forEach(l=>{mn=Math.min(mn,l);mx=Math.max(mx,l)});if(mx-mn<1e-9){mn-=.5;mx+=.5}
+const Yc=y=>4+(1-(y-mn)/(mx-mn))*(H-18),Xc=i=>34+(t[i]-ts)/Math.max(10,te-ts)*(W-38);
+c.strokeStyle=css('--bd');c.fillStyle=css('--mut');c.font='10px sans-serif';c.strokeRect(34,4,W-38,H-18);c.fillText(mx.toPrecision(3),0,12);c.fillText(mn.toPrecision(3),0,H-14);c.fillText(ts.toFixed(1)+' s',34,H-3);c.fillText(te.toFixed(1)+' s',W-40,H-3);
+if(lines){c.setLineDash([3,3]);lines.forEach(l=>{c.beginPath();c.moveTo(34,Yc(l));c.lineTo(W-4,Yc(l));c.stroke()});c.setLineDash([])}
+vs.forEach((v,k)=>{c.strokeStyle=cols[k];c.beginPath();for(let i=i0;i<t.length;i++){i===i0?c.moveTo(Xc(i),Yc(v[i])):c.lineTo(Xc(i),Yc(v[i]))}c.stroke()})}
+$('exp').innerHTML=EXP.map((e,i)=>`<option value="${i}">${e[0]}</option>`).join('');
+$('runexp').onclick=()=>{const ex=EXP[+$('exp').value];$('res').textContent='計算中…';
+setTimeout(()=>{let h='<table><tr><th>条件</th><th>10周期の移動 (cm)</th><th>1周期あたり (cm)</th><th>最終の胴体の傾き (°)</th></tr>';
+ex[1].forEach(([n,o])=>{if(typeof o==='function')o=o(P);const r=summ(trial(Object.assign({},P,o),10));h+=`<tr><td>${n}</td><td>${r.dist.toFixed(2)}</td><td>${r.per.toFixed(2)}</td><td>${r.pitch.toFixed(1)}</td></tr>`});
+$('res').innerHTML=h+'</table><small>1周期あたりは、1周期目を除いた周期の平均です。</small>'},30)};
+function frame(now){const df=Math.min(0.05,(now-last)/1000);last=now;if(running){acc+=df*speed;let k=0;while(acc>=sim.dt&&k<60){sim.step();acc-=sim.dt;k++}}draw();requestAnimationFrame(frame)}
+requestAnimationFrame(frame);
+</script></main></body></html>
